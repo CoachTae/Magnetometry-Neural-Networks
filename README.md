@@ -26,3 +26,8 @@ What does this mean for our NN project? Well in an ideal world, we'd just train 
 It is for this reason that we split our region-of-interest into 3 sections. The UDET (Upper Detector) region will range from 3cm <= z <= 550cm and 0cm <= r <= 10cm. The Filter region, made smaller to stay within the F coil, will range from -3cm <= z <= 3cm and 0cm <= r <= 3cm. Once we've made it far enough away from the F coil, we expand outwards again for the LDET (Lower Detector) region ranging from -150cm <= z <= -3cm and 0cm <= r <= 10cm.
 
 The splitting of 3 regions means the separate training of 3 models. When we need the field, we'll just decide which model to ask the field from based on the coordinates in question.
+
+## Cylindrical vs Rectangular
+I did mention cylindrical symmetry and cylindrical surfaces but I've been a bit misleading. While our coils have cylindrical symmetry in their fields, our magnetic shielding is **not** cylindrically symmetric. Partially for that reason, but also since cartesian is just easier to work with in Opera3D as well as calculating the divergence and curl computationally, I choose to use cartesian coordinates.
+
+What does this mean for training? Well it just means that we're training on the boundary of a rectangular box rather than a cylinder. It'll be a cylindrical-ish box though! The x and y widths will always be the same just like the radius of a cylinder is! So when you see me use cartesian coordinates, there's the reason.

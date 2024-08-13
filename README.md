@@ -9,6 +9,7 @@ Sometimes these 3D simulations are not available to a team, either due to pricin
 I'm working on a document that will cover the details of this section a little bit more in depth, but for now we should cover a key component of this effort called the uniqueness theorem. Let's begin with Maxwell's equations, the equations that describe the behavior of magnetic fields. If we select a region that has no currents or changing electric fields within the interior, then Maxwell's equations simplify to:
 
 $\nabla \cdot \textbf{B} = 0$
+ 
 $\nabla \times \textbf{B} = 0$
 
 Again, details will be saved for another document, but these equations basically mean that, within this region, there is a unique solution to Maxwell's equations. The importance of this is crucial. That means that, if we can get a NN to accurately map the field on the boundary of this region accurately, then the entire field that it predicts inside must also be accurate. If it produced a solution that worked on the boundary, that one solution **must** be equal to the unique solution to Maxwell's equations.

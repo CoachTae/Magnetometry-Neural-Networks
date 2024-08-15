@@ -82,4 +82,4 @@ for i in range(3):
                       data=data_type
                       )
 
-model.save_model(f'Region {region} {field_type}-Field Trained On Boundary ({hidden_size}, {num_hidden_layers}).pth')
+    model.save_model(f'Region {region} {field_type}-Field Trained On Boundary ({hidden_size}, {num_hidden_layers}).pth')

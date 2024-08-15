@@ -27,13 +27,13 @@ data_type = 'Boundary'
     # 1 = UDET
     # 2 = Filter
     # 3 = LDET
-region = 1
+#region = 3
 
 #--------------NETWORK ARCHITECTURE-----------------------------------------
 if field_type == 'B' or field_type == 'A':
     input_size = 3 # x, y, z coordinates
     hidden_size = 32 # Neurons per layer
-    num_hidden_layers = 4
+    num_hidden_layers = 8
     output_size = 3 # Bx, By, Bz
 
 elif field_type == 'phi':
@@ -71,12 +71,15 @@ if data_type == 'Axis':
 #print("Done with initial interior scan.")
 #print("\n\nTraining the model.\n\n")
 
+for i in range(3):
+    region = i + 1
+    model.train_model(num_epochs=50,
+                      num_points=10000,
+                      region=region,
+                      train_split=0.8,
+                      validation_threshold=1e-6,
+                      do_int_scan=False,
+                      data=data_type
+                      )
 
-model.train_model(num_epochs=5000,
-                  num_points=10000,
-                  train_split=0.8,
-                  validation_threshold=1e-6,
-                  do_int_scan=False,
-                  data=data_type)
-
-model.save_model('Region 1 B-Field Trained On Boundary ('+str(hidden_size)+', '+str(num_hidden_layers)+').pth')
+model.save_model(f'Region {region} {field_type}-Field Trained On Boundary ({hidden_size}, {num_hidden_layers}).pth')

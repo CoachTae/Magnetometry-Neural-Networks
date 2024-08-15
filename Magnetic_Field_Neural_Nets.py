@@ -173,12 +173,13 @@ class MagneticFieldNN(BaseNN):
     def train_model(self,
                     num_epochs,
                     num_points, # Number of points to train per epoch
+                    region,
                     train_split, # What fraction b/w 0 and 1 is used for training
                     validation_threshold, # What threshold suffices during validation
                     learning_rate=1e-3, # Learning rate for the optimizer
                     do_int_scan=True,
                     data='Boundary',
-                    region=1): # Only relevant for boundary training
+                    ): 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         scan_optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         self.train() # Set the model to training mode
@@ -191,7 +192,7 @@ class MagneticFieldNN(BaseNN):
         for epoch in range(num_epochs):
             if data == 'Boundary':
                 # Pull random points from the 3 cylinder surfaces
-                sampled_points_top_cap, sampled_points_bot_cap, sampled_points_shell = Support.random_boundary_points(num_points, top_cap, bot_cap, shell)
+                sampled_points_top_cap, sampled_points_bot_cap, sampled_points_shell = Support.random_boundary_points(num_points, top_cap, bot_cap, shell, region=region)
                 sampled_points = np.vstack((sampled_points_top_cap, sampled_points_bot_cap, sampled_points_shell))
 
             elif data == 'Axis':

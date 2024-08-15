@@ -10,20 +10,20 @@ import math
 def random_points(num_points, region=1, device='cuda'):
     if region == 1: # UDET Region
         radius = 10
-        bottom_height = 3
+        bottom_height = 1.5
         height = 525 - bottom_height
     
     
     elif region == 2: # F coil region
         radius = 4.5
-        bottom_height = -3
-        height = 3 - bottom_height
+        bottom_height = -1.5
+        height = 1.5 - bottom_height
     
     
     elif region == 3: # LDET region
         radius = 10
         bottom_height = -125
-        height = -3 - bottom_height
+        height = -1.5 - bottom_height
 
     # Random radial distances
     # The sqrt pushes points outwards to avoid clustering near the center and encourage even distribution in a circle
@@ -160,33 +160,62 @@ def generate_boundary_coordinates(dr, bottom, top, num_points, filenames):
             
     
     
-def load_boundary(region=1):
+def load_boundary(region):
     if region == 1:
         # ALL ARRAYS HERE SHOULD BE OF SHAPE nx6 (COORDINATES + B-FIELD VECTOR)
-        top_cap = np.load('UDET Top Cap.npy')
-        bot_cap = np.load('UDET Bot Cap.npy')
-        shell = np.load('UDET Shell.npy')
+        top_cap = np.load('UDET_Top_Cap.npy')
+        bot_cap = np.load('UDET_Bot_Cap.npy')
+        shell = np.load('UDET_Shell.npy')
         return top_cap, bot_cap, shell
 
-def random_boundary_points(num_points, top_cap, bot_cap, shell, region=1):
+    elif region == 2:
+        top_cap = np.load('F_Top_Cap.npy')
+        bot_cap = np.load('F_Bot_Cap.npy')
+        shell = np.load('F_Shell.npy')
+        return top_cap, bot_cap, shell
+
+    elif region == 3:
+        top_cap = np.load('LDET_Top_Cap.npy')
+        bot_cap = np.load('LDET_Bot_Cap.npy')
+        shell = np.load('LDET_Shell.npy')
+        return top_cap, bot_cap, shell
+
+def random_boundary_points(num_points, top_cap, bot_cap, shell, region):
     if region == 1:
-        radius = 10
-        bottom_height = 3
-        height = 525 - bottom_height
+        width = 10
+        bottom_height = 1.5
+        height = 550 - bottom_height
 
-        cap_ratio = radius / (2*(radius + height))
-        shell_ratio = height / (radius + height)
+        
+
+    elif region == 2:
+        width = 3.18
+        bottom_height = -1.5
+        height = 1.5 - bottom_height
 
 
-        num_points_caps = int(round(cap_ratio * num_points, 0))
-        num_points_shell = int(round(shell_ratio * num_points, 0))
+    elif region == 3:
+        width = 10
+        bottom_height = -150
+        height = -1.5 - bottom_height
 
-        top_cap_indices = np.random.choice(top_cap.shape[0], size=num_points_caps, replace=False)
-        bot_cap_indices = np.random.choice(bot_cap.shape[0], size=num_points_caps, replace=False)
-        shell_indices = np.random.choice(shell.shape[0], size=num_points_shell, replace=False)
+        
+    cap_area = width**2
+    face_area = width*height
+    total_area = 2*cap_area + 4*face_area
 
-        return top_cap[top_cap_indices], bot_cap[bot_cap_indices], shell[shell_indices]
+    cap_ratio = cap_area / total_area
+    shell_ratio = 4*face_area / total_area
 
+
+    num_points_caps = int(round(cap_ratio * num_points, 0))
+    num_points_shell = int(round(shell_ratio * num_points, 0))
+
+    top_cap_indices = np.random.choice(top_cap.shape[0], size=num_points_caps, replace=False)
+    bot_cap_indices = np.random.choice(bot_cap.shape[0], size=num_points_caps, replace=False)
+    shell_indices = np.random.choice(shell.shape[0], size=num_points_shell, replace=False)
+
+    return top_cap[top_cap_indices], bot_cap[bot_cap_indices], shell[shell_indices]
 #----------------------------------------------------------------------------------------------------------------
 
 
@@ -199,10 +228,10 @@ def random_axis_points(num_points, data):
     indices = np.random.choice(data.shape[0], size=num_points, replace=False)
     return data[indices]
 
-def generate_axis_points(num_points=65000):
-    step = 650/num_points
-    z0 = -125
-    zf = 525
+def generate_axis_points(num_points=70000):
+    step = 700/num_points
+    z0 = -150
+    zf = 550
 
     points = []
     for i in range(num_points+1):
@@ -214,7 +243,7 @@ def generate_axis_points(num_points=65000):
     
 
 #-----------------------PLOTTING-------------------------------------------------------
-def plot_axis(coordinates, fields, title=''):
+def plot_axis(coordinates, fields, scatter=False, title=''):
     z_values = coordinates[:,2]
     field_mags = []
 
@@ -223,7 +252,10 @@ def plot_axis(coordinates, fields, title=''):
         field_mags.append(mag)
 
     fig, ax = plt.subplots()
-    ax.plot(z_values, field_mags)
+    if not scatter:
+        ax.plot(z_values, field_mags)
+    else:
+        ax.scatter(z_values, field_mags, s=10)
     ax.set_xlabel('z (cm)')
     ax.set_ylabel('B (Teslas)')
     ax.set_title(title)
@@ -245,6 +277,11 @@ def npy_to_table(array, filename):
             file.write(f'{point[0]}\t{point[1]}\t{point[2]}\n')
 
 def table_to_npy(files):
+    '''
+    Files can be a single file or a list/tuple of files
+
+    EXPECTS UNITS OF T, NOT GAUSS
+    '''
     def write_array(filename):
         with open(filename, 'r') as file:
             # Skip lines until we finish the header

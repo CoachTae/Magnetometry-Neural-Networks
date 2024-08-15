@@ -184,7 +184,7 @@ class MagneticFieldNN(BaseNN):
         self.train() # Set the model to training mode
 
         if data == 'Boundary':
-            top_cap, bot_cap, shell = Support.load_boundary()
+            top_cap, bot_cap, shell = Support.load_boundary(region=region)
         elif data == 'Axis':
             axis_data = Support.load_axis()
         

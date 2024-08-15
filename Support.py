@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 
 # Region 1 will be anything above the filter region
 # Region 2 will be the filter region, very small
@@ -46,6 +47,106 @@ def random_points(num_points, region=1, device='cuda'):
 
 
 #-----------------------------BOUNDARY DATA FUNCTIONS------------------------------------------------------------
+def generate_boundary_coordinates(dr, bottom, top, num_points, filenames):
+    '''
+    Generates the coordinates on the surface of a rectangular box.
+
+    dr gives the total width along x and y.
+        e.g. dr = 20 means x spans from -10 to +10, and y does the same
+
+    bottom is the z-coordinate corresponding to the bottom of the box
+
+    top is the z-coordinate corresponding to the top of the box
+
+    num_points is the number of points for the entire surface
+
+    filenames should be a list like [bot_cap_name, top_cap_name, shell_name]
+    '''
+
+    # Find the total z-distance travelled
+    dz = top - bottom
+
+    # Area for each cap, face, and the total surface area
+    Cap_Area = dr**2
+    Shell_Face_Area = dr*dz
+    Total_Area = 2*Cap_Area + 4*Shell_Face_Area
+    
+    # Find the number of points for each face (cap or shell)
+    num_cap_points = int(round((Cap_Area / Total_Area) * num_points))
+    num_face_points = int(round((Shell_Face_Area / Total_Area) * num_points))
+    
+    # Splitting the grid of points into how many points per row (or column)
+    # sqrt should mean that we get the same # of points for each row and column
+    # We round up just to make sure we get at least the requested # of points
+    num_cap_row_points = int(math.sqrt(num_cap_points) // 1) + 1
+    num_shell_row_points = int(math.sqrt(num_face_points) // 1) + 1
+
+    # Size of each step (steps are of same size for the square caps
+    r_step = dr / num_cap_row_points
+    z_step = dz / num_shell_row_points
+    r_step_face = dr / num_shell_row_points
+    
+    cap_points1 = []
+    cap_points2 = []
+    # Generate cap points
+    for deltax in range(num_cap_row_points + 1):
+        for deltay in range(num_cap_row_points + 1):
+            point = [-dr/2 + r_step*deltax,
+                     -dr/2 + r_step*deltay,
+                     bottom]
+            cap_points1.append(point)
+
+            point = [-dr/2 + r_step*deltax,
+                     -dr/2 + r_step*deltay,
+                     top]
+            cap_points2.append(point)
+
+    
+    shell1 = []
+    shell2 = []
+    shell3 = []
+    shell4 = []
+    # Generate shell points
+    for i in range(num_shell_row_points + 1):
+        for j in range(num_shell_row_points + 1):
+            point1 = [-dr/2 + r_step_face * i,
+                      -dr/2,
+                      bottom + z_step * j]
+            shell1.append(point1)
+
+            point2 = [dr/2,
+                      -dr/2 + r_step_face * i,
+                      bottom + z_step * j]
+            shell2.append(point2)
+
+            point3 = [-dr/2 + r_step_face * i,
+                      dr/2,
+                      bottom + z_step * j]
+            shell3.append(point3)
+
+            point4 = [-dr/2,
+                      -dr/2 + r_step_face * i,
+                      bottom + z_step * j]
+            shell4.append(point4)
+
+    full_shell = []
+    for i in range(len(shell1)):
+        full_shell.append(shell1[i])
+        full_shell.append(shell2[i])
+        full_shell.append(shell3[i])
+        full_shell.append(shell4[i])
+
+    bot_cap = np.array(cap_points1)
+    top_cap = np.array(cap_points2)
+    shell = np.array(full_shell)
+        
+        
+    np.save(filenames[0], bot_cap)
+    np.save(filenames[1], top_cap)
+    np.save(filenames[2], shell)
+            
+    
+    
 def load_boundary(region=1):
     if region == 1:
         # ALL ARRAYS HERE SHOULD BE OF SHAPE nx6 (COORDINATES + B-FIELD VECTOR)

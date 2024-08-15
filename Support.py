@@ -51,6 +51,17 @@ def generate_boundary_coordinates(dr, bottom, top, num_points, filenames):
     '''
     Generates the coordinates on the surface of a rectangular box.
 
+    sqrt(2)/2 * max_radius should give you a good dr for rectangular boxes.
+        e.g. F coil has an inner radius of 4.57cm (let's round to 4.5 to be safe
+             4.5 * sqrt(2)/2 = (the dr we should use for this).
+             To see this, draw a square of side lengths dr
+                 draw the diagonal (longest line along the square)
+                 this diagonal is our max distance (4.5)
+                 any longer and we'd hit our coil
+                 since it's a square, it's an equilateral triangle
+                 dr/4.5 = cos(45)
+                 dr = 4.5 * sqrt(2)/2
+
     dr gives the total width along x and y.
         e.g. dr = 20 means x spans from -10 to +10, and y does the same
 
@@ -61,6 +72,8 @@ def generate_boundary_coordinates(dr, bottom, top, num_points, filenames):
     num_points is the number of points for the entire surface
 
     filenames should be a list like [bot_cap_name, top_cap_name, shell_name]
+
+    Gives coordinates in .table form for Opera to calculate values at
     '''
 
     # Find the total z-distance travelled
@@ -141,9 +154,9 @@ def generate_boundary_coordinates(dr, bottom, top, num_points, filenames):
     shell = np.array(full_shell)
         
         
-    np.save(filenames[0], bot_cap)
-    np.save(filenames[1], top_cap)
-    np.save(filenames[2], shell)
+    npy_to_table(bot_cap, filenames[0])
+    npy_to_table(top_cap, filenames[1])
+    npy_to_table(shell, filenames[2])
             
     
     
@@ -215,3 +228,41 @@ def plot_axis(coordinates, fields, title=''):
     ax.set_ylabel('B (Teslas)')
     ax.set_title(title)
     plt.show()
+
+
+
+#-------------------OPERA FUNCTIONS----------------------------------------------
+
+def npy_to_table(array, filename):
+    with open(filename, 'w') as file:
+        file.write(str(len(array[:,0])) + ' 1 1 2\n')
+        file.write('1 X [CM]\n')
+        file.write('2 Y [CM]\n')
+        file.write('3 Z [CM]\n')
+        file.write('0\n')
+
+        for point in array:
+            file.write(f'{point[0]}\t{point[1]}\t{point[2]}\n')
+
+def table_to_npy(files):
+    def write_array(filename):
+        with open(filename, 'r') as file:
+            # Skip lines until we finish the header
+            while True:
+                line = file.readline().strip()
+                if line == '0':
+                    break
+            data = np.loadtxt(file)
+            output_file = filename.replace('table', 'npy')
+            np.save(output_file, data)
+
+    if isinstance(files, str):
+        write_array(files)
+
+    elif isinstance(files, list) or isinstance(files, tuple):
+        for file in files:
+            write_array(file)
+    else:
+        print("Error in filename for table_to_npy.")
+        print(f"Type given: {type(files)}")
+

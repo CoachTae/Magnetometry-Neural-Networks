@@ -12,7 +12,7 @@ field_type = 'B'
 if field_type == 'B' or field_type == 'A':
     input_size = 3 # x, y, z coordinates
     hidden_size = 32 # Neurons per layer
-    num_hidden_layers = 4
+    num_hidden_layers = 8
     output_size = 3 # Bx, By, Bz
 
 elif field_type == 'phi':

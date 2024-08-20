@@ -1,0 +1,15 @@
+Run 1:
+	Boundaries were 3 separate regions being split at z=-1.5cm and z=1.5cm.
+		Each region had 1million points equally distributed on it
+	32x4
+	50 epochs
+	10,000 points per epoch
+	train_split = 0.8
+	validation_threshold = 1e-6 (never met I don't think)
+	No interior scan
+	
+
+Run 2:
+	Same boundaries as Run 1
+	32x8
+	everything else same as Run 1

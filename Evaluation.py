@@ -3,6 +3,7 @@ import Magnetic_Field_Neural_Nets as MagNN
 import Support
 import torch
 
+
 #--------------PARAMETERS--------------------------------------
 # B, A, or phi are available options
 field_type = 'B'

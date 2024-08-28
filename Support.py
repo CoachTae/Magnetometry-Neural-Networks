@@ -2,244 +2,217 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import sys
 
 # Region 1 will be anything above the filter region
 # Region 2 will be the filter region, very small
 # Region 3 will be anything below the filter region
 # This function is for use in the neural network's interior scan to ensure that any given point within a region obeys Maxwell's Equations
-def random_points(num_points, region=1, device='cuda'):
-    if region == 1: # UDET Region
-        radius = 10
-        bottom_height = 1.5
-        height = 525 - bottom_height
-    
-    
-    elif region == 2: # F coil region
-        radius = 4.5
-        bottom_height = -1.5
-        height = 1.5 - bottom_height
-    
-    
-    elif region == 3: # LDET region
-        radius = 10
-        bottom_height = -125
-        height = -1.5 - bottom_height
-
-    # Random radial distances
-    # The sqrt pushes points outwards to avoid clustering near the center and encourage even distribution in a circle
-    r = torch.sqrt(torch.rand(num_points, device=device))*radius
-
-    # Random angles
-    theta = torch.rand(num_points, device=device)*2*np.pi
-
-    # Random heights
-    z = torch.rand(num_points, device=device)*height + bottom_height
-
-    # Convert to cartesian coordinates
-    x = r*torch.cos(theta)
-    y = r*torch.sin(theta)
-
-    # Stack coordinates
-    points = torch.stack([x, y, z], dim=1)
-
-    return points
+def random_points(num_points, device='cuda'):
+    # To be redone after removal of references to "region" is complete
+    pass
         
 
 
 #-----------------------------BOUNDARY DATA FUNCTIONS------------------------------------------------------------
-def generate_boundary_coordinates(dr, bottom, top, num_points, filenames):
+def generate_boundary_coordinates(step, filenames):
     '''
-    Generates the coordinates on the surface of a rectangular box.
+    Given a step size between points, generate points equally
+        distributed among the boundary specified.
 
-    sqrt(2)/2 * max_radius should give you a good dr for rectangular boxes.
-        e.g. F coil has an inner radius of 4.57cm (let's round to 4.5 to be safe
-             4.5 * sqrt(2)/2 = (the dr we should use for this).
-             To see this, draw a square of side lengths dr
-                 draw the diagonal (longest line along the square)
-                 this diagonal is our max distance (4.5)
-                 any longer and we'd hit our coil
-                 since it's a square, it's an equilateral triangle
-                 dr/4.5 = cos(45)
-                 dr = 4.5 * sqrt(2)/2
+    This function will need to be tailored to any given boundary shape.
 
-    dr gives the total width along x and y.
-        e.g. dr = 20 means x spans from -10 to +10, and y does the same
-
-    bottom is the z-coordinate corresponding to the bottom of the box
-
-    top is the z-coordinate corresponding to the top of the box
-
-    num_points is the number of points for the entire surface
-
-    filenames should be a list like [bot_cap_name, top_cap_name, shell_name]
-
-    Gives coordinates in .table form for Opera to calculate values at
+    The resulting points need to be run through a simulation software.
+    In my case, I'm processing the field at these points through Opera3D.
     '''
 
-    # Find the total z-distance travelled
-    dz = top - bottom
+    def get_points(start, end, step):
+        '''
+        Define a rectangle with 2 points.
 
-    # Area for each cap, face, and the total surface area
-    Cap_Area = dr**2
-    Shell_Face_Area = dr*dz
-    Total_Area = 2*Cap_Area + 4*Shell_Face_Area
+        Generate equidistant points on that surface.
+        '''
+
+        points = []
+
+        k = 0
+        while k*step <= end[2] - start[2]:
+            j=0
+            while j*step <= end[1] - start[1]:
+                i=0
+                while i*step <= end[0] - start[0]:
+                    points.append([round(start[0] + i*step, 5),
+                                   round(start[1] + j*step, 5),
+                                   round(start[2] + k*step, 5)])
+                    i += 1
+                j += 1
+            k += 1
+
+        return points
+
+    # UDET Cap
+    start = (-10, -10, 510)
+    end = (10, 10, 510)
+    top_cap = get_points(start, end, step)
+    top_cap = np.array(top_cap)
+
+    # UDET Shell
+    start = (-10, -10, 1.5)
+    end = (10, -10, 510)
+    UDET_Shell1 = get_points(start, end, step)
+    UDET_Shell1 = np.array(UDET_Shell1)
+
+    start = (10, -10, 1.5)
+    end = (10, 10, 510)
+    UDET_Shell2 = get_points(start, end, step)
+    UDET_Shell2 = np.array(UDET_Shell2)
+
+    start = (-10, 10, 1.5)
+    end = (10, 10, 510)
+    UDET_Shell3 = get_points(start, end, step)
+    UDET_Shell3 = np.array(UDET_Shell3)
+
+    start = (-10, -10, 1.5)
+    end = (-10, 10, 510)
+    UDET_Shell4 = get_points(start, end, step)
+    UDET_Shell4 = np.array(UDET_Shell4)
+
     
-    # Find the number of points for each face (cap or shell)
-    num_cap_points = int(round((Cap_Area / Total_Area) * num_points))
-    num_face_points = int(round((Shell_Face_Area / Total_Area) * num_points))
+
+    # The bottom cap of the UDET box
+    # We need to remove the parts that are inside to F region shell
+    start = (-10, -10, 1.5)
+    end = (10, 10, 1.5)
+    UDET_Bottom = get_points(start, end, step)
+    UDET_Bottom = np.array(UDET_Bottom)
+
+    # If x is within the confines of the F shell
+    condition1 = (-3.182 < UDET_Bottom[:,0]) & (UDET_Bottom[:,0] < 3.182)
+
+    # IF y is within the confines of the F shell
+    condition2 = (-3.182 < UDET_Bottom[:,1]) & (UDET_Bottom[:,1] < 3.182)
+
+    combined_condition = condition1 & condition2
+
+    # Mark the indices in need of deletion
+    indices = np.where(combined_condition)[0]
+
+    UDET_Bottom = np.delete(UDET_Bottom, indices, axis=0)
+
+
+
+    # F region shell
+    start = (-3.182, -3.182, -1.5)
+    end = (3.182, -3.182, 1.5)
+    F_Shell1 = get_points(start, end, step)
+    F_Shell1 = np.array(F_Shell1)
+
+    start = (3.182, -3.182, -1.5)
+    end = (3.182 ,3.182, 1.5)
+    F_Shell2 = get_points(start, end, step)
+    F_Shell2 = np.array(F_Shell2)
+
+    start = (-3.182, 3.182, -1.5)
+    end = (3.182, 3.182, 1.5)
+    F_Shell3 = get_points(start, end, step)
+    F_Shell3 = np.array(F_Shell3)
+
+    start = (-3.182, -3.182, -1.5)
+    end = (-3.182, 3.182, 1.5)
+    F_Shell4 = get_points(start, end, step)
+    F_Shell4 = np.array(F_Shell4)
+
+
+
+    # LDET Top cap with the inner region inside the F Shell taken out
+    start = (-10, -10, -1.5)
+    end = (10, 10, -1.5)
+    LDET_Top = get_points(start, end, step)
+    LDET_Top = np.array(LDET_Top)
+
+    # If x is within the confines of the F shell
+    condition1 = (-3.182 < LDET_Top[:,0]) & (LDET_Top[:,0] < 3.182)
+
+    # IF y is within the confines of the F shell
+    condition2 = (-3.182 < LDET_Top[:,1]) & (LDET_Top[:,1] < 3.182)
+
+    combined_condition = condition1 & condition2
+
+    # Mark the indices in need of deletion
+    indices = np.where(combined_condition)[0]
+
+    LDET_Top = np.delete(LDET_Top, indices, axis=0)
+
+
+    # LDET Shell
+    start = (-10, -10, -125)
+    end = (10, -10, -1.5)
+    LDET_Shell1 = get_points(start, end, step)
+    LDET_Shell1 = np.array(LDET_Shell1)
+
+    start = (10, -10, -125)
+    end = (10, 10, -1.5)
+    LDET_Shell2 = get_points(start, end, step)
+    LDET_Shell2 = np.array(LDET_Shell2)
+
+    start = (-10, 10, -125)
+    end = (10, 10, -1.5)
+    LDET_Shell3 = get_points(start, end, step)
+    LDET_Shell3 = np.array(LDET_Shell3)
+
+    start = (-10, -10, -125)
+    end = (-10, 10, -1.5)
+    LDET_Shell4 = get_points(start, end, step)
+    LDET_Shell4 = np.array(LDET_Shell4)
+
+
+    # LDET Cap
+    start = (-10, -10, -125)
+    end = (10, 10, -125)
+    bot_cap = get_points(start, end, step)
+    bot_cap = np.array(bot_cap)
+
+    all_arrays = (top_cap,
+                  UDET_Shell1,
+                  UDET_Shell2,
+                  UDET_Shell3,
+                  UDET_Shell4,
+                  UDET_Bottom,
+                  F_Shell1,
+                  F_Shell2,
+                  F_Shell3,
+                  F_Shell4,
+                  LDET_Top,
+                  LDET_Shell1,
+                  LDET_Shell2,
+                  LDET_Shell3,
+                  LDET_Shell4,
+                  bot_cap)
+
+    print("Top Cap: ", top_cap.shape[0], " Points")
+    print("UDET Shell: ", UDET_Shell1.shape[0], " Points per face")
+    print("UDET Bottom: ", UDET_Bottom.shape[0], " Points")
+    print("F Shell: ", F_Shell1.shape[0], " Points per face")
+    print("LDET Top: ", LDET_Top.shape[0], " Points")
+    print("LDET Shell: ", LDET_Shell1.shape[0], " Points per face")
+    print("Bot Cap: ", bot_cap.shape[0], " Points")
+
+    all_points = np.vstack(all_arrays)
+
+    print("All points: ", all_points.shape[0])
+
+    np.save(filename, all_points)
     
-    # Splitting the grid of points into how many points per row (or column)
-    # sqrt should mean that we get the same # of points for each row and column
-    # We round up just to make sure we get at least the requested # of points
-    num_cap_row_points = int(math.sqrt(num_cap_points) // 1) + 1
-    num_shell_row_points = int(math.sqrt(num_face_points) // 1) + 1
 
-    # Size of each step (steps are of same size for the square caps
-    r_step = dr / num_cap_row_points
-    z_step = dz / num_shell_row_points
-    r_step_face = dr / num_shell_row_points
-    
-    cap_points1 = []
-    cap_points2 = []
-    # Generate cap points
-    for deltax in range(num_cap_row_points + 1):
-        for deltay in range(num_cap_row_points + 1):
-            point = [-dr/2 + r_step*deltax,
-                     -dr/2 + r_step*deltay,
-                     bottom]
-            cap_points1.append(point)
-
-            point = [-dr/2 + r_step*deltax,
-                     -dr/2 + r_step*deltay,
-                     top]
-            cap_points2.append(point)
-
-    
-    shell1 = []
-    shell2 = []
-    shell3 = []
-    shell4 = []
-    # Generate shell points
-    for i in range(num_shell_row_points + 1):
-        for j in range(num_shell_row_points + 1):
-            point1 = [-dr/2 + r_step_face * i,
-                      -dr/2,
-                      bottom + z_step * j]
-            shell1.append(point1)
-
-            point2 = [dr/2,
-                      -dr/2 + r_step_face * i,
-                      bottom + z_step * j]
-            shell2.append(point2)
-
-            point3 = [-dr/2 + r_step_face * i,
-                      dr/2,
-                      bottom + z_step * j]
-            shell3.append(point3)
-
-            point4 = [-dr/2,
-                      -dr/2 + r_step_face * i,
-                      bottom + z_step * j]
-            shell4.append(point4)
-
-    full_shell = []
-    for i in range(len(shell1)):
-        full_shell.append(shell1[i])
-        full_shell.append(shell2[i])
-        full_shell.append(shell3[i])
-        full_shell.append(shell4[i])
-
-    bot_cap = np.array(cap_points1)
-    top_cap = np.array(cap_points2)
-    shell = np.array(full_shell)
-        
-        
-    npy_to_table(bot_cap, filenames[0])
-    npy_to_table(top_cap, filenames[1])
-    npy_to_table(shell, filenames[2])
-            
-    
-    
-def load_boundary(region):
-    if region == 1:
-        # ALL ARRAYS HERE SHOULD BE OF SHAPE nx6 (COORDINATES + B-FIELD VECTOR)
-        top_cap = np.load('UDET_Top_Cap.npy')
-        bot_cap = np.load('UDET_Bot_Cap.npy')
-        shell = np.load('UDET_Shell.npy')
-        return top_cap, bot_cap, shell
-
-    elif region == 2:
-        top_cap = np.load('F_Top_Cap.npy')
-        bot_cap = np.load('F_Bot_Cap.npy')
-        shell = np.load('F_Shell.npy')
-        return top_cap, bot_cap, shell
-
-    elif region == 3:
-        top_cap = np.load('LDET_Top_Cap.npy')
-        bot_cap = np.load('LDET_Bot_Cap.npy')
-        shell = np.load('LDET_Shell.npy')
-        return top_cap, bot_cap, shell
 
 def random_boundary_points(num_points, top_cap, bot_cap, shell, region):
-    if region == 1:
-        width = 10
-        bottom_height = 1.5
-        height = 550 - bottom_height
+   # Not sure if needed but might have to redo this during rework
+   pass
 
-        
-
-    elif region == 2:
-        width = 3.18
-        bottom_height = -1.5
-        height = 1.5 - bottom_height
+   
 
 
-    elif region == 3:
-        width = 10
-        bottom_height = -150
-        height = -1.5 - bottom_height
 
-        
-    cap_area = width**2
-    face_area = width*height
-    total_area = 2*cap_area + 4*face_area
-
-    cap_ratio = cap_area / total_area
-    shell_ratio = 4*face_area / total_area
-
-
-    num_points_caps = int(round(cap_ratio * num_points, 0))
-    num_points_shell = int(round(shell_ratio * num_points, 0))
-
-    top_cap_indices = np.random.choice(top_cap.shape[0], size=num_points_caps, replace=False)
-    bot_cap_indices = np.random.choice(bot_cap.shape[0], size=num_points_caps, replace=False)
-    shell_indices = np.random.choice(shell.shape[0], size=num_points_shell, replace=False)
-
-    return top_cap[top_cap_indices], bot_cap[bot_cap_indices], shell[shell_indices]
-#----------------------------------------------------------------------------------------------------------------
-
-
-#---------------------------ON-AXIS DATA FUNCTIONS-----------------------------------------------------
-def load_axis():
-    data = np.load('OnAxisOpera.npy')
-    return data
-
-def random_axis_points(num_points, data):
-    indices = np.random.choice(data.shape[0], size=num_points, replace=False)
-    return data[indices]
-
-def generate_axis_points(num_points=70000):
-    step = 700/num_points
-    z0 = -150
-    zf = 550
-
-    points = []
-    for i in range(num_points+1):
-        point = [0, 0, z0+(i*step)]
-        points.append(point)
-
-    points = np.array(points)
-    return points
     
 
 #-----------------------PLOTTING-------------------------------------------------------

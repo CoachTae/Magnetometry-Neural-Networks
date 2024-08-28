@@ -119,7 +119,6 @@ class MagneticFieldNN(BaseNN):
     def interior_scan(self,
                       num_points_per_scan, # Number of points per scan
                       num_scans, # Number of consecutive scans that must meet the threshold to end the scanning
-                      region=1, # What region we're scanning (to avoid F coil)
                       threshold=1e-8, # Loss threshold that must be met to count as successful
                       optimizer=None, # None for initial scan. Optimizer from training method can pass in an argument here so that we don't reinitialize every time
                       int_scan_lr=1e-3, # Default learning rate for interior scan optimizer
@@ -138,7 +137,7 @@ class MagneticFieldNN(BaseNN):
 
         scan_number = 0
         while scan_number < num_scans:
-            points = Support.random_points(num_points_per_scan, region=region, device=device)
+            points = Support.random_points(num_points_per_scan, device=device)
             
             points.requires_grad_(True) # Require gradients for input points
             
@@ -173,7 +172,6 @@ class MagneticFieldNN(BaseNN):
     def train_model(self,
                     num_epochs,
                     num_points, # Number of points to train per epoch
-                    region,
                     train_split, # What fraction b/w 0 and 1 is used for training
                     validation_threshold, # What threshold suffices during validation
                     learning_rate=1e-3, # Learning rate for the optimizer
@@ -186,8 +184,6 @@ class MagneticFieldNN(BaseNN):
 
         if data == 'Boundary':
             top_cap, bot_cap, shell = Support.load_boundary(region=region)
-        elif data == 'Axis':
-            axis_data = Support.load_axis()
         
         for epoch in range(num_epochs):
             if data == 'Boundary':
@@ -195,9 +191,7 @@ class MagneticFieldNN(BaseNN):
                 sampled_points_top_cap, sampled_points_bot_cap, sampled_points_shell = Support.random_boundary_points(num_points, top_cap, bot_cap, shell, region=region)
                 sampled_points = np.vstack((sampled_points_top_cap, sampled_points_bot_cap, sampled_points_shell))
 
-            elif data == 'Axis':
-                sampled_points = Support.random_axis_points(num_points, axis_data)
-
+            
             # Split the data into training and validation sets
             split_index = int(train_split * num_points)
             training_points = sampled_points[:split_index, :]

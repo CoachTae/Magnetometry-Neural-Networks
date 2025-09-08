@@ -1,3 +1,4 @@
+import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -71,15 +72,13 @@ if data_type == 'Axis':
 #print("Done with initial interior scan.")
 #print("\n\nTraining the model.\n\n")
 
-for i in range(3):
-    region = i + 1
-    model.train_model(num_epochs=50,
-                      num_points=10000,
-                      region=region,
-                      train_split=0.8,
-                      validation_threshold=1e-6,
-                      do_int_scan=False,
-                      data=data_type
-                      )
+model.train_model(num_epochs=50,
+                  num_points=10000,
+                  train_split=0.8,
+                  validation_threshold=1e-9,
+                  do_int_scan=False,
+                  dataType=data_type,
+                  N = 100000
+                  )
 
-    model.save_model(f'Region {region} {field_type}-Field Trained On Boundary ({hidden_size}, {num_hidden_layers}).pth')
+model.save_model(f'Unified Regions {field_type}-Field Trained On Boundary ({hidden_size}, {num_hidden_layers}).pth')

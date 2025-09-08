@@ -1,222 +1,294 @@
+import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import sys
+projects_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ferenc_path = os.path.join(projects_dir, "Nab Magnetometry/Bferenc Files/Magnetometry-master/Bferenc Python/")
+sys.path.append(ferenc_path)
+magfield_path = os.path.join(ferenc_path, "magfield")
+sys.path.append(magfield_path)
 
-# Region 1 will be anything above the filter region
-# Region 2 will be the filter region, very small
-# Region 3 will be anything below the filter region
-# This function is for use in the neural network's interior scan to ensure that any given point within a region obeys Maxwell's Equations
-def random_points(num_points, region=1, device='cuda'):
-    if region == 1: # UDET Region
-        radius = 10
-        bottom_height = 1.5
-        height = 525 - bottom_height
-    
-    
-    elif region == 2: # F coil region
-        radius = 4.5
-        bottom_height = -1.5
-        height = 1.5 - bottom_height
-    
-    
-    elif region == 3: # LDET region
-        radius = 10
-        bottom_height = -125
-        height = -1.5 - bottom_height
-
-    # Random radial distances
-    # The sqrt pushes points outwards to avoid clustering near the center and encourage even distribution in a circle
-    r = torch.sqrt(torch.rand(num_points, device=device))*radius
-
-    # Random angles
-    theta = torch.rand(num_points, device=device)*2*np.pi
-
-    # Random heights
-    z = torch.rand(num_points, device=device)*height + bottom_height
-
-    # Convert to cartesian coordinates
-    x = r*torch.cos(theta)
-    y = r*torch.sin(theta)
-
-    # Stack coordinates
-    points = torch.stack([x, y, z], dim=1)
-
-    return points
-        
+from MainRoutine import mainmagfield
+import magfield
 
 
 #-----------------------------BOUNDARY DATA FUNCTIONS------------------------------------------------------------
-def generate_boundary_coordinates(dr, bottom, top, num_points, filenames):
-    '''
-    Generates the coordinates on the surface of a rectangular box.
+def get_ratios():
+    # Geometric constants
+    r_top = 10
+    r_mid = 2
+    z_top = 500
+    z_1 = 1.5
+    z_2 = -1.5
+    z_bot = -100
 
-    sqrt(2)/2 * max_radius should give you a good dr for rectangular boxes.
-        e.g. F coil has an inner radius of 4.57cm (let's round to 4.5 to be safe
-             4.5 * sqrt(2)/2 = (the dr we should use for this).
-             To see this, draw a square of side lengths dr
-                 draw the diagonal (longest line along the square)
-                 this diagonal is our max distance (4.5)
-                 any longer and we'd hit our coil
-                 since it's a square, it's an equilateral triangle
-                 dr/4.5 = cos(45)
-                 dr = 4.5 * sqrt(2)/2
+    # Area calculations
+    A_topcap = np.pi * r_top**2
+    A_botcap = np.pi * r_top**2
+    A_topwall = 2 * np.pi * r_top * (z_top - z_1)
+    A_botwall = 2 * np.pi * r_top * (z_2 - z_bot)
+    A_midwall = 2 * np.pi * r_mid * (z_1 - z_2)
+    A_up_ring = np.pi * (r_top**2 - r_mid**2)
+    A_lo_ring = np.pi * (r_top**2 - r_mid**2)
 
-    dr gives the total width along x and y.
-        e.g. dr = 20 means x spans from -10 to +10, and y does the same
+    areas = np.array([A_topcap, A_botcap, A_topwall, A_botwall, A_midwall, A_up_ring, A_lo_ring])
 
-    bottom is the z-coordinate corresponding to the bottom of the box
+    # Fraction of points per surface
+    fractions = areas / areas.sum()
+    return fractions
 
-    top is the z-coordinate corresponding to the top of the box
+def get_surface_points(boundary_pts, N):
+    fractions = get_ratios()
+    counts = np.round(fractions * N).astype(int)
 
-    num_points is the number of points for the entire surface
+    # Ensure sum exactly equals N
+    while counts.sum() < N:
+        counts[np.argmax(fractions)] += 1
+    while counts.sum() > N:
+        counts[np.argmax(counts)] -= 1
 
-    filenames should be a list like [bot_cap_name, top_cap_name, shell_name]
+    surfaces = ["topcap", "botcap", "topshell", "botshell", "midshell", "upring", "lowring"]
 
-    Gives coordinates in .table form for Opera to calculate values at
-    '''
-
-    # Find the total z-distance travelled
-    dz = top - bottom
-
-    # Area for each cap, face, and the total surface area
-    Cap_Area = dr**2
-    Shell_Face_Area = dr*dz
-    Total_Area = 2*Cap_Area + 4*Shell_Face_Area
+    points = []
+    # Pull a total of N points from the boundaries
+    for i, surface in enumerate(surfaces):
+        n = counts[i]
+        indices = np.random.choice(boundary_pts[surface].shape[0], size=n, replace=False)
+        npoints = boundary_pts[surface][indices, :]
+        for point in npoints:
+            points.append(point)
     
-    # Find the number of points for each face (cap or shell)
-    num_cap_points = int(round((Cap_Area / Total_Area) * num_points))
-    num_face_points = int(round((Shell_Face_Area / Total_Area) * num_points))
+    points = np.array(points)
+    return points
+
+
+
+def load_boundary_points():
+    points = {}
+
+    # Directory and file names of the different boundary parts to load training data from
+    folder_dir = "S:/Python/Projects/Magnetometry-Neural-Networks/boundary_points"
+    files = ["topcap", "botcap", "topshell", "botshell", "midshell", "upring", "lowring"]
+
+    # Load the precalculated points and pull n random points from them.
+    for file in files:
+        points[file] = np.load(folder_dir+"/"+file+".npy")
     
-    # Splitting the grid of points into how many points per row (or column)
-    # sqrt should mean that we get the same # of points for each row and column
-    # We round up just to make sure we get at least the requested # of points
-    num_cap_row_points = int(math.sqrt(num_cap_points) // 1) + 1
-    num_shell_row_points = int(math.sqrt(num_face_points) // 1) + 1
-
-    # Size of each step (steps are of same size for the square caps
-    r_step = dr / num_cap_row_points
-    z_step = dz / num_shell_row_points
-    r_step_face = dr / num_shell_row_points
     
-    cap_points1 = []
-    cap_points2 = []
-    # Generate cap points
-    for deltax in range(num_cap_row_points + 1):
-        for deltay in range(num_cap_row_points + 1):
-            point = [-dr/2 + r_step*deltax,
-                     -dr/2 + r_step*deltay,
-                     bottom]
-            cap_points1.append(point)
+    return points
 
-            point = [-dr/2 + r_step*deltax,
-                     -dr/2 + r_step*deltay,
-                     top]
-            cap_points2.append(point)
 
+def generate_random_points_in_volume(N):
+    # Cylinder definitions
+    # (zmin, zmax, radius)
+    regions = [
+        (1.5, 500, 10),     # Top
+        (-1.5, 1.5, 2),     # Middle
+        (-100, -1.5, 10)    # Bottom
+    ]
     
-    shell1 = []
-    shell2 = []
-    shell3 = []
-    shell4 = []
-    # Generate shell points
-    for i in range(num_shell_row_points + 1):
-        for j in range(num_shell_row_points + 1):
-            point1 = [-dr/2 + r_step_face * i,
-                      -dr/2,
-                      bottom + z_step * j]
-            shell1.append(point1)
-
-            point2 = [dr/2,
-                      -dr/2 + r_step_face * i,
-                      bottom + z_step * j]
-            shell2.append(point2)
-
-            point3 = [-dr/2 + r_step_face * i,
-                      dr/2,
-                      bottom + z_step * j]
-            shell3.append(point3)
-
-            point4 = [-dr/2,
-                      -dr/2 + r_step_face * i,
-                      bottom + z_step * j]
-            shell4.append(point4)
-
-    full_shell = []
-    for i in range(len(shell1)):
-        full_shell.append(shell1[i])
-        full_shell.append(shell2[i])
-        full_shell.append(shell3[i])
-        full_shell.append(shell4[i])
-
-    bot_cap = np.array(cap_points1)
-    top_cap = np.array(cap_points2)
-    shell = np.array(full_shell)
+    # Calculate volumes for probability weighting
+    volumes = []
+    for zmin, zmax, r in regions:
+        h = zmax - zmin
+        volumes.append(np.pi * r**2 * h)
+    volumes = np.array(volumes)
+    probs = volumes / volumes.sum()
+    
+    # Decide which region each point belongs to
+    region_choices = np.random.choice(len(regions), size=N, p=probs)
+    
+    # Pre-allocate
+    points = np.zeros((N, 3))
+    
+    for idx, region_idx in enumerate(region_choices):
+        zmin, zmax, rmax = regions[region_idx]
+        # Uniform z in the region
+        z = np.random.uniform(zmin, zmax)
+        # Uniformly in a disk (not clustered at center)
+        theta = np.random.uniform(0, 2*np.pi)
+        rr = rmax * np.sqrt(np.random.uniform(0,1))
+        x = rr * np.cos(theta)
+        y = rr * np.sin(theta)
+        points[idx] = [x, y, z]
         
-        
-    npy_to_table(bot_cap, filenames[0])
-    npy_to_table(top_cap, filenames[1])
-    npy_to_table(shell, filenames[2])
-            
+    return points
+  
     
-    
-def load_boundary(region):
-    if region == 1:
-        # ALL ARRAYS HERE SHOULD BE OF SHAPE nx6 (COORDINATES + B-FIELD VECTOR)
-        top_cap = np.load('UDET_Top_Cap.npy')
-        bot_cap = np.load('UDET_Bot_Cap.npy')
-        shell = np.load('UDET_Shell.npy')
-        return top_cap, bot_cap, shell
-
-    elif region == 2:
-        top_cap = np.load('F_Top_Cap.npy')
-        bot_cap = np.load('F_Bot_Cap.npy')
-        shell = np.load('F_Shell.npy')
-        return top_cap, bot_cap, shell
-
-    elif region == 3:
-        top_cap = np.load('LDET_Top_Cap.npy')
-        bot_cap = np.load('LDET_Bot_Cap.npy')
-        shell = np.load('LDET_Shell.npy')
-        return top_cap, bot_cap, shell
-
-def random_boundary_points(num_points, top_cap, bot_cap, shell, region):
-    if region == 1:
-        width = 10
-        bottom_height = 1.5
-        height = 550 - bottom_height
-
-        
-
-    elif region == 2:
-        width = 3.18
-        bottom_height = -1.5
-        height = 1.5 - bottom_height
 
 
-    elif region == 3:
-        width = 10
-        bottom_height = -150
-        height = -1.5 - bottom_height
+#---------------------INTERNAL POINT SAMPLER-----------------------------------------------------------
+def get_internal_points(N):
+    # Geometric constants
+    r_top = 10
+    r_mid = 2
+    z_top = 500
+    z_1 = 1.5
+    z_2 = -1.5
+    z_bot = -100
 
-        
-    cap_area = width**2
-    face_area = width*height
-    total_area = 2*cap_area + 4*face_area
+    # Volumes (π R^2 h)
+    top_vol = np.pi * (r_top**2) * (z_top - z1)
+    mid_vol = np.pi * (r_mid**2) * (z1 - z2)
+    bot_vol = np.pi * (r_top**2) * (z2 - z_bot)
 
-    cap_ratio = cap_area / total_area
-    shell_ratio = 4*face_area / total_area
+    vols = np.array([top_vol, mid_vol, bot_vol], dtype=float)
+    fracs = vols / vols.sum()
+
+    # Allocate counts with deterministic rounding that sums to N
+    counts = np.floor(fracs * N).astype(int)
+
+    n_top, n_mid, n_bot = counts.tolist()
+
+    def sample_cylinder(n, r_max, z_min, z_max):
+        if n <= 0:
+            return np.empty((0, 3))
+        # Uniform in height and angle; r via sqrt trick for area-uniform disks
+        z = rng.uniform(z_min, z_max, size=n)
+        theta = rng.uniform(0.0, 2.0*np.pi, size=n)
+        r = r_max * np.sqrt(rng.uniform(0.0, 1.0, size=n))
+        x = r * np.cos(theta)
+        y = r * np.sin(theta)
+        return np.column_stack((x, y, z))
+
+    # Sample each region
+    top_pts = sample_cylinder(n_top, r_top, z1, z_top)
+    mid_pts = sample_cylinder(n_mid, r_mid, z2, z1)
+    bot_pts = sample_cylinder(n_bot, r_top, z_bot, z2)
+
+    pts = np.vstack((top_pts, mid_pts, bot_pts))
+    np.random.default_rng().shuffle(pts)  # de-bias any ordering
+    return pts    
+
+#--------------------------FERENC ROUTINE---------------------------------------
+def get_field(points):
+    # Convert points to m
+    points = points/100
+    B = mainmagfield(points=points, asfunction=True)
+    return B
 
 
-    num_points_caps = int(round(cap_ratio * num_points, 0))
-    num_points_shell = int(round(shell_ratio * num_points, 0))
 
-    top_cap_indices = np.random.choice(top_cap.shape[0], size=num_points_caps, replace=False)
-    bot_cap_indices = np.random.choice(bot_cap.shape[0], size=num_points_caps, replace=False)
-    shell_indices = np.random.choice(shell.shape[0], size=num_points_shell, replace=False)
 
-    return top_cap[top_cap_indices], bot_cap[bot_cap_indices], shell[shell_indices]
-#----------------------------------------------------------------------------------------------------------------
+
+
+def save_surface_points(
+    N_total=1000000, # Total points per surface
+    seed=None,
+    out_dir="boundary_points"
+):
+
+    if seed is not None:
+        np.random.seed(seed)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Geometric constants
+    r_top = 10
+    r_mid = 2
+    z_top = 500
+    z_1 = 1.5
+    z_2 = -1.5
+    z_bot = -100
+
+    # 1. Top cap: z = z_top, r in [0, r_top]
+    n = N_total
+    r = r_top * np.sqrt(np.random.rand(n))
+    theta = 2 * np.pi * np.random.rand(n)
+    x = r * np.cos(theta)
+    y = r * np.sin(theta)
+    z = np.full(n, z_top)
+    points = np.column_stack([x, y, z])
+    ferenc_points = points/100
+    field = mainmagfield(points=ferenc_points, asfunction=True)
+    np.savetxt(f"{out_dir}/topcap_points.txt", np.hstack((points, field)), fmt="%.6f")
+
+    # 2. Bottom cap: z = z_bot, r in [0, r_top]
+    r = r_top * np.sqrt(np.random.rand(n))
+    theta = 2 * np.pi * np.random.rand(n)
+    x = r * np.cos(theta)
+    y = r * np.sin(theta)
+    z = np.full(n, z_bot)
+    points = np.column_stack([x, y, z])
+    ferenc_points = points/100
+    field = mainmagfield(points=ferenc_points, asfunction=True)
+    np.savetxt(f"{out_dir}/botcap_points.txt", np.hstack((points, field)), fmt="%.6f")
+
+    # 3. Top wall: r = r_top, z in (z_1, z_top]
+    z = np.random.uniform(z_1, z_top, n)
+    theta = 2 * np.pi * np.random.rand(n)
+    x = r_top * np.cos(theta)
+    y = r_top * np.sin(theta)
+    points = np.column_stack([x, y, z])
+    ferenc_points = points/100
+    field = mainmagfield(points=ferenc_points, asfunction=True)
+    np.savetxt(f"{out_dir}/topwall_points.txt", np.column_stack([x, y, z]), fmt="%.6f")
+
+    # 4. Bottom wall: r = r_top, z in [z_bot, z_2)
+    z = np.random.uniform(z_bot, z_2, n)
+    theta = 2 * np.pi * np.random.rand(n)
+    x = r_top * np.cos(theta)
+    y = r_top * np.sin(theta)
+    points = np.column_stack([x, y, z])
+    ferenc_points = points/100
+    field = mainmagfield(points=ferenc_points, asfunction=True)
+    np.savetxt(f"{out_dir}/botwall_points.txt", np.column_stack([x, y, z]), fmt="%.6f")
+
+    # 5. Middle wall: r = r_mid, z in [z_2, z_1]
+    z = np.random.uniform(z_2, z_1, n)
+    theta = 2 * np.pi * np.random.rand(n)
+    x = r_mid * np.cos(theta)
+    y = r_mid * np.sin(theta)
+    points = np.column_stack([x, y, z])
+    ferenc_points = points/100
+    field = mainmagfield(points=ferenc_points, asfunction=True)
+    np.savetxt(f"{out_dir}/midwall_points.txt", np.column_stack([x, y, z]), fmt="%.6f")
+
+    # 6. Upper ring: z = z_1, r in (r_mid, r_top]
+    r = np.sqrt(np.random.uniform(r_mid**2, r_top**2, n))
+    theta = 2 * np.pi * np.random.rand(n)
+    x = r * np.cos(theta)
+    y = r * np.sin(theta)
+    z = np.full(n, z_1)
+    points = np.column_stack([x, y, z])
+    ferenc_points = points/100
+    field = mainmagfield(points=ferenc_points, asfunction=True)
+    np.savetxt(f"{out_dir}/up_ring_points.txt", np.column_stack([x, y, z]), fmt="%.6f")
+
+    # 7. Lower ring: z = z_2, r in (r_mid, r_top]
+    r = np.sqrt(np.random.uniform(r_mid**2, r_top**2, n))
+    theta = 2 * np.pi * np.random.rand(n)
+    x = r * np.cos(theta)
+    y = r * np.sin(theta)
+    z = np.full(n, z_2)
+    points = np.column_stack([x, y, z])
+    ferenc_points = points/100
+    field = mainmagfield(points=ferenc_points, asfunction=True)
+    np.savetxt(f"{out_dir}/lo_ring_points.txt", np.column_stack([x, y, z]), fmt="%.6f")
+
+    print(f"Saved {N_total} points for each surface in '{out_dir}/'.")
+
+
+
+
+
+
+def convert_txt_to_npy(directory):
+    """
+    Converts all .txt files in a directory to .npy files (same base filename).
+    Assumes each txt file contains plain whitespace-separated columns.
+    """
+    for fname in os.listdir(directory):
+        if fname.endswith('.txt'):
+            txt_path = os.path.join(directory, fname)
+            npy_path = os.path.join(directory, fname.replace('.txt', '.npy'))
+            print(f"Converting {txt_path} to {npy_path} ...")
+            arr = np.loadtxt(txt_path)
+            np.save(npy_path, arr)
+    print("All txt files converted to npy.")
+
+
 
 
 #---------------------------ON-AXIS DATA FUNCTIONS-----------------------------------------------------
@@ -228,10 +300,10 @@ def random_axis_points(num_points, data):
     indices = np.random.choice(data.shape[0], size=num_points, replace=False)
     return data[indices]
 
-def generate_axis_points(num_points=70000):
-    step = 700/num_points
-    z0 = -150
-    zf = 550
+def generate_axis_points(num_points=60000):
+    step = 600/num_points
+    z0 = -100
+    zf = 500
 
     points = []
     for i in range(num_points+1):
@@ -302,4 +374,59 @@ def table_to_npy(files):
     else:
         print("Error in filename for table_to_npy.")
         print(f"Type given: {type(files)}")
+
+
+
+from mpl_toolkits.mplot3d import Axes3D
+
+def plot_boundary_points(points, title="Boundary Points",
+                         xstart=None, xend=None, ystart=None, yend=None,
+                         zstart=None, zend=None):
+    """
+    Plots 3D boundary points.
+
+    Args:
+        points (np.ndarray): Array of shape (n, 3) containing x, y, z coordinates of points.
+        title (str): Title for the plot.
+    """
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], s=1, alpha=0.6)
+    
+    ax.set_xlabel('X (cm)')
+    ax.set_ylabel('Y (cm)')
+    ax.set_zlabel('Z (cm)')
+    if xstart is not None and xend is not None:
+        plt.xlim(xstart, xend)
+    if ystart is not None and yend is not None:
+        plt.ylim(ystart, yend)
+    if zstart is not None and zend is not None:
+        ax.set_zlim(zstart, zend)
+    ax.set_title(title)
+    plt.show()
+
+
+if __name__ == "__main__":
+    files = ["topshell", "botshell", "midshell", "upring", "lowring"]
+    for file in files:
+        data = np.load(file+".npy")
+        print(data.shape)
+    sys.exit()
+    
+    folder_dir = "S:/Python/Projects/Magnetometry-Neural-Networks/boundary_points"
+    files = ["topcap", "botcap", "topshell", "botshell", "midshell", "upring", "lowring"]
+
+    for file in files:
+        data = np.load(folder_dir+"/"+file+".npy")
+        
+        if data.shape[1] != 6:
+            print(f"Calculating field for {file}...")
+            B = get_field(data)
+
+            print(f"Writing {file}...")
+            with open(file+".txt", 'w') as f:
+                counter = 0
+                for i, field in enumerate(B):
+                    f.write(f"{data[i,0]}\t{data[i,1]}\t{data[i,2]}\t{field[0]}\t{field[1]}\t{field[2]}\n")
+
 

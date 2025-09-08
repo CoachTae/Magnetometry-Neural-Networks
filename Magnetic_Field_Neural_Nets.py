@@ -1,3 +1,4 @@
+import sys
 import torch
 import torch.nn as nn
 import Support
@@ -60,24 +61,14 @@ class MagneticFieldNN(BaseNN):
         return mse_loss
 
     def compute_div_loss(self, inputs):
-        # Ensure inputs require gradients
         inputs.requires_grad_(True)
+        B = self.forward(inputs)
+        dBx = torch.autograd.grad(B[:,0].sum(), inputs, create_graph=True, only_inputs=True)[0]
+        dBy = torch.autograd.grad(B[:,1].sum(), inputs, create_graph=True, only_inputs=True)[0]
+        dBz = torch.autograd.grad(B[:,2].sum(), inputs, create_graph=True, only_inputs=True)[0]
+        div = dBx[:,0] + dBy[:,1] + dBz[:,2]
+        return (div**2).mean()
 
-        # Get model predictions
-        outputs = self.forward(inputs)
-
-        # Calculate gradients (partial derivatives) for each component
-        # Creates an array of shape (outputs.shape) of all 1 entries
-            # Don't fully understand this line
-            # Seems to mean that it cares about each gradient equally
-                # So that none get ignored
-        grad_outputs = torch.ones_like(outputs)
-        gradients = torch.autograd.grad(outputs=outputs, inputs=inputs, grad_outputs=grad_outputs, create_graph=True, only_inputs=True)[0]
-        
-        # Calculate divergence as the sum of partials
-        divergence = gradients[:, 0] + gradients[:, 1] + gradients[:, 2]
-
-        return torch.mean(divergence ** 2)
 
     def compute_curl_loss(self, inputs):
         # Ensure inputs require gradients
@@ -116,99 +107,45 @@ class MagneticFieldNN(BaseNN):
 
         return total_loss
 
-    def interior_scan(self,
-                      num_points_per_scan, # Number of points per scan
-                      num_scans, # Number of consecutive scans that must meet the threshold to end the scanning
-                      region=1, # What region we're scanning (to avoid F coil)
-                      threshold=1e-8, # Loss threshold that must be met to count as successful
-                      optimizer=None, # None for initial scan. Optimizer from training method can pass in an argument here so that we don't reinitialize every time
-                      int_scan_lr=1e-3, # Default learning rate for interior scan optimizer
-                      device=None): # Make sure we're on the same device as model
+    
 
-        if device is None:
-            device = self.device
-        
-        # Make sure model is on the correct device
-        self.to(device)
 
-        self.train() # Set model to training mode
-
-        if optimizer == None:
-            optimizer = torch.optim.Adam(self.parameters(), lr=int_scan_lr)
-
-        scan_number = 0
-        while scan_number < num_scans:
-            points = Support.random_points(num_points_per_scan, region=region, device=device)
-            
-            points.requires_grad_(True) # Require gradients for input points
-            
-            # Zero the gradients
-            optimizer.zero_grad()
-            
-            # Forward pass
-            outputs = self.forward(points)
-
-            # Compute losses
-            div_loss = self.compute_div_loss(points)
-            curl_loss = self.compute_curl_loss(points)
-            total_loss = div_loss + curl_loss
-
-            # Backward pass
-            total_loss.backward()
-
-            # Update parameters
-            optimizer.step()
-
-            # Find max loss
-            max_loss = torch.max(total_loss)
-
-            if max_loss < threshold:
-                scan_number += 1
-            else:
-                scan_number = 0
-
-    # "data" variable in the method call will differentiate different types of data
-        # "Boundary" will do just the boundary of a cylinder within the specified region
-        # Region 1 is the UDET region starting at z=3cm
     def train_model(self,
                     num_epochs,
                     num_points, # Number of points to train per epoch
-                    region,
                     train_split, # What fraction b/w 0 and 1 is used for training
                     validation_threshold, # What threshold suffices during validation
                     learning_rate=1e-3, # Learning rate for the optimizer
-                    do_int_scan=True,
-                    data='Boundary',
+                    dataType='Boundary',
+                    int_point_ratio=10, # num_points*int_point_ratio = num_internal_points
+                    batch_size=32 # Passed to run_training method
                     ): 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
-        scan_optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         self.train() # Set the model to training mode
 
-        if data == 'Boundary':
-            top_cap, bot_cap, shell = Support.load_boundary(region=region)
-        elif data == 'Axis':
-            axis_data = Support.load_axis()
+        if dataType == 'Boundary':
+            data = Support.load_boundary_points()
+                   
+                
+        elif dataType == 'Axis':
+            data = Support.load_axis()
+
         
         for epoch in range(num_epochs):
-            if data == 'Boundary':
-                # Pull random points from the 3 cylinder surfaces
-                sampled_points_top_cap, sampled_points_bot_cap, sampled_points_shell = Support.random_boundary_points(num_points, top_cap, bot_cap, shell, region=region)
-                sampled_points = np.vstack((sampled_points_top_cap, sampled_points_bot_cap, sampled_points_shell))
-
-            elif data == 'Axis':
-                sampled_points = Support.random_axis_points(num_points, axis_data)
+            # Select random points for this epoch
+            sampled_points = Support.get_surface_points(data, num_points)
+            internal_points = Support.get_internal_points(num_points*int_point_ratio)
+            
+            # Avoids bias since we always load in points from top to bottom
+            np.random.shuffle(sampled_points)
 
             # Split the data into training and validation sets
-            split_index = int(train_split * num_points)
-            training_points = sampled_points[:split_index, :]
-            validation_points = sampled_points[split_index:, :]
-
-            # Do interior scan
-            if do_int_scan:
-                self.interior_scan(num_points, num_scans=10, threshold=1e-8, optimizer=scan_optimizer)
+            split = int(train_split * num_points)
+            training_points = sampled_points[:split]
+            validation_points = sampled_points[split:]
 
             # Training phase
-            training_loss = self.run_training(training_points, optimizer)
+            training_loss = self.run_training(training_points, optimizer, batch_size=batch_size)
 
             # Validation phase
             validation_loss = self.run_validation(validation_points)
@@ -252,7 +189,7 @@ class MagneticFieldNN(BaseNN):
             predictions = self.forward(inputs_batch)
 
             # Compute Loss
-            lambdas = [1, 1, 1]
+            lambdas = [2, 1, 1]
             total_loss = self.compute_total_loss(predictions, targets_batch, inputs_batch, lambdas)
             
             # Backwards pass and optimize

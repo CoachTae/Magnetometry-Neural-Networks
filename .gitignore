@@ -1,2 +1,8 @@
 
 *.png
+
+*.npy
+
+boundary_points/
+
+temp/

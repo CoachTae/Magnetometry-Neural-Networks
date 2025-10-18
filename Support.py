@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import sys
+import random
 projects_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 ferenc_path = os.path.join(projects_dir, "Nab Magnetometry/Bferenc Files/Magnetometry-master/Bferenc Python/")
 sys.path.append(ferenc_path)
@@ -13,6 +14,30 @@ sys.path.append(magfield_path)
 from MainRoutine import mainmagfield
 import magfield
 
+
+
+#----------------------------NORMALIZATION--------------------------------------
+def normalize_coords(coords):
+    # coords: (N,3) torch tensor (any requires_grad)
+    sx, sy, sz = 10.0, 10.0, 300.0
+    ox, oy, oz = 0.0, 0.0, 200.0
+    # broadcast-safe, no in-place
+    return torch.stack([(coords[:,0]-ox)/sx, (coords[:,1]-oy)/sy, (coords[:,2]-oz)/sz], dim=1)
+
+
+def scale_back_coords(coords):
+    coords[:,0] = coords[:,0]*10
+    coords[:,1] = coords[:,1]*10
+    coords[:,2] = coords[:,2]*300 + 200
+    return coords
+
+def normalize_Bfield(field):
+    field /= 7
+    return field
+
+def scale_back_Bfield(field):
+    field *= 7
+    return field
 
 #-----------------------------BOUNDARY DATA FUNCTIONS------------------------------------------------------------
 def get_ratios():
@@ -130,9 +155,9 @@ def get_internal_points(N):
     z_bot = -100
 
     # Volumes (π R^2 h)
-    top_vol = np.pi * (r_top**2) * (z_top - z1)
-    mid_vol = np.pi * (r_mid**2) * (z1 - z2)
-    bot_vol = np.pi * (r_top**2) * (z2 - z_bot)
+    top_vol = np.pi * (r_top**2) * (z_top - z_1)
+    mid_vol = np.pi * (r_mid**2) * (z_1 - z_2)
+    bot_vol = np.pi * (r_top**2) * (z_2 - z_bot)
 
     vols = np.array([top_vol, mid_vol, bot_vol], dtype=float)
     fracs = vols / vols.sum()
@@ -146,17 +171,17 @@ def get_internal_points(N):
         if n <= 0:
             return np.empty((0, 3))
         # Uniform in height and angle; r via sqrt trick for area-uniform disks
-        z = rng.uniform(z_min, z_max, size=n)
-        theta = rng.uniform(0.0, 2.0*np.pi, size=n)
-        r = r_max * np.sqrt(rng.uniform(0.0, 1.0, size=n))
+        z = np.random.uniform(z_min, z_max, size=n)
+        theta = np.random.uniform(0.0, 2.0*np.pi, size=n)
+        r = r_max * np.sqrt(np.random.uniform(0.0, 1.0, size=n))
         x = r * np.cos(theta)
         y = r * np.sin(theta)
         return np.column_stack((x, y, z))
 
     # Sample each region
-    top_pts = sample_cylinder(n_top, r_top, z1, z_top)
-    mid_pts = sample_cylinder(n_mid, r_mid, z2, z1)
-    bot_pts = sample_cylinder(n_bot, r_top, z_bot, z2)
+    top_pts = sample_cylinder(n_top, r_top, z_1, z_top)
+    mid_pts = sample_cylinder(n_mid, r_mid, z_2, z_1)
+    bot_pts = sample_cylinder(n_bot, r_top, z_bot, z_2)
 
     pts = np.vstack((top_pts, mid_pts, bot_pts))
     np.random.default_rng().shuffle(pts)  # de-bias any ordering
@@ -293,7 +318,7 @@ def convert_txt_to_npy(directory):
 
 #---------------------------ON-AXIS DATA FUNCTIONS-----------------------------------------------------
 def load_axis():
-    data = np.load('OnAxisOpera.npy')
+    data = np.load('TrueAxisField.npy')
     return data
 
 def random_axis_points(num_points, data):
@@ -334,6 +359,22 @@ def plot_axis(coordinates, fields, scatter=False, title=''):
     plt.show()
 
 
+def compare_fields(coords, predictions, actual, dot_size=20, font_size=12):
+    z = coords[:,2]
+    Bpred = np.sqrt(predictions[:,0]**2 + predictions[:,1]**2 + predictions[:,2]**2)
+    BTrue = actual[:,1]
+    plt.scatter(z, Bpred, label='Predicted', s=dot_size)
+    plt.scatter(z, BTrue, label='True', s=dot_size)
+
+    plt.xlabel("z (cm)", fontsize=font_size)
+    plt.ylabel("B (T)", fontsize=font_size)
+    
+    
+    
+    plt.legend(fontsize=font_size - 1)
+    plt.tick_params(axis='both', labelsize=font_size - 2)
+    plt.tight_layout()
+    plt.show()
 
 #-------------------OPERA FUNCTIONS----------------------------------------------
 
@@ -407,26 +448,18 @@ def plot_boundary_points(points, title="Boundary Points",
 
 
 if __name__ == "__main__":
-    files = ["topshell", "botshell", "midshell", "upring", "lowring"]
-    for file in files:
-        data = np.load(file+".npy")
-        print(data.shape)
-    sys.exit()
-    
-    folder_dir = "S:/Python/Projects/Magnetometry-Neural-Networks/boundary_points"
-    files = ["topcap", "botcap", "topshell", "botshell", "midshell", "upring", "lowring"]
+    points = load_boundary_points()
+    max_x = -10000
+    max_y = -10000
+    for key in points.keys():
+        x = np.max(points[key][:,3])
+        y = np.max(points[key][:,4])
 
-    for file in files:
-        data = np.load(folder_dir+"/"+file+".npy")
-        
-        if data.shape[1] != 6:
-            print(f"Calculating field for {file}...")
-            B = get_field(data)
-
-            print(f"Writing {file}...")
-            with open(file+".txt", 'w') as f:
-                counter = 0
-                for i, field in enumerate(B):
-                    f.write(f"{data[i,0]}\t{data[i,1]}\t{data[i,2]}\t{field[0]}\t{field[1]}\t{field[2]}\n")
+        if x > max_x:
+            max_x = x
+        if y > max_y:
+            max_y = y
+    print(max_x)
+    print(max_y)
 
 

@@ -93,17 +93,67 @@ class MagneticFieldNN(BaseNN):
         # Return the average squared magnitude as the loss
         return torch.mean(curl_magnitude_squared)
 
+
+    def get_B_from_phi(self, inputs):
+        """
+        Compute B from -grad(phi).
+        inputs: (N,3) tensor with requires_grad=True
+        returns: (N,3) tensor
+        """
+
+        inputs.requires_grad_(True)
+        phi = self.forward(inputs)
+        grads = torch.autograd.grad(
+            phi.sum(), inputs, create_graph=True, only_inputs=True)[0]
+        B_pred = -grads
+        return B_pred
+
+
+    def get_laplacian(self, inputs):
+        """
+        Compute Laplacian of phi from network output.
+        input: (N,3) coordinates tensor with requires_grad=True
+        returns: (N,) tensor of Laplacian values at each point
+        """
+        inputs.requires_grad_(True)
+        phi = self.forward(inputs)
+        grads = torch.autograd.grad(
+            phi.sum(), inputs, create_graph=True, only_inputs=True)[0]
+
+        laplacian = 0
+        for j in range(3):
+            grad_j = grads[:,j].sum()
+            d2phi = torch.autograd.grad(
+                grad_j, inputs, create_graph=True, only_inputs=True)[0][:,j]
+            laplacian += d2phi
+
+        return laplacian
+    
+
+    def L1_reg(self, lambda_l1):
+        l1_penalty = 0.0
+        for param in self.parameters():
+            l1_penalty += torch.sum(torch.abs(param))
+        return lambda_l1 * l1_penalty
+    
+    
     def compute_total_loss(self,
                            predictions, # Array of predicted values
                            targets, # Array of target values 
                            inputs, # Array of input values
-                           lambdas): # list of 3 lambda values
+                           lambdas, # list of 4 lambda values: [MSE, Div, Curl, L1]
+                           L1 = False # Do we do L1 regularization?
+                           ): 
+                                    
         # Grab all 3 components of the total loss function
         mse_loss = self.compute_mse_loss(predictions, targets)
         div_loss = self.compute_div_loss(inputs)
         curl_loss = self.compute_curl_loss(inputs)
 
         total_loss = lambdas[0]*mse_loss + lambdas[1]*div_loss + lambdas[2]*curl_loss
+
+        if L1:
+            total_loss += self.L1_reg(lambdas[3])
 
         return total_loss
 
@@ -118,8 +168,13 @@ class MagneticFieldNN(BaseNN):
                     learning_rate=1e-3, # Learning rate for the optimizer
                     dataType='Boundary',
                     int_point_ratio=10, # num_points*int_point_ratio = num_internal_points
-                    batch_size=32 # Passed to run_training method
-                    ): 
+                    batch_size=32, # Passed to run_training method
+                    lambdas=(2,1,1,1e-5, 100), # Weights for loss function
+                                                # (MSE, Div, Curl, L1, Laplacian)
+                    L1=False, # Do we do L1 regularization?
+                    Field="B", # Which field do we train? ('B', or 'phi')
+                    ):
+        self.Field = Field
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         self.train() # Set the model to training mode
 
@@ -132,6 +187,9 @@ class MagneticFieldNN(BaseNN):
 
         
         for epoch in range(num_epochs):
+            # Can turn this on to simulate what's done in the paper
+            #optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+            
             # Select random points for this epoch
             sampled_points = Support.get_surface_points(data, num_points)
             internal_points = Support.get_internal_points(num_points*int_point_ratio)
@@ -145,7 +203,14 @@ class MagneticFieldNN(BaseNN):
             validation_points = sampled_points[split:]
 
             # Training phase
-            training_loss = self.run_training(training_points, optimizer, batch_size=batch_size)
+            training_loss = self.run_training(training_points,
+                                              internal_points,
+                                              optimizer,
+                                              batch_size=batch_size,
+                                              int_point_ratio=int_point_ratio,
+                                              lambdas=lambdas,
+                                              L1=L1
+                                              )
 
             # Validation phase
             validation_loss = self.run_validation(validation_points)
@@ -162,16 +227,25 @@ class MagneticFieldNN(BaseNN):
             print('\n')
 
     # This function is only used within the "train_model" method. It's listed separately for readability
-    def run_training(self, training_points, optimizer, batch_size=32):
+    def run_training(self, training_points,
+                     internal_points,
+                     optimizer,
+                     int_point_ratio,
+                     lambdas,
+                     batch_size=32,
+                     L1=False
+                     ):
         # Shuffle data
         np.random.shuffle(training_points)
 
         # Convert training points to torch tensor
         training_points_tensor = torch.tensor(training_points, dtype=torch.float, device=self.device)
+        internal_points_tensor = torch.tensor(internal_points, dtype=torch.float, device=self.device)
 
         # Split training data into inputs and targets
         inputs = training_points_tensor[:, :3] # Pulls x, y, and z
         targets = training_points_tensor[:, 3:] # Pulls Bx, By, and Bz
+
 
         # Initialize loss for this whole set of points
         running_loss = 0.0
@@ -181,16 +255,35 @@ class MagneticFieldNN(BaseNN):
             # Extract batch
             inputs_batch = inputs[i:i + batch_size]
             targets_batch = targets[i:i + batch_size]
+            internal_batch = internal_points_tensor[int_point_ratio*i:int_point_ratio*(i + batch_size)]
 
             # Zero the optimizer's parameter gradients
             optimizer.zero_grad()
 
             # Forward pass
-            predictions = self.forward(inputs_batch)
+            if self.Field == 'B':
+                predictions = self.forward(inputs_batch)
+            elif self.Field.lower() == 'phi':
+                predictions = self.get_B_from_phi(inputs_batch)
+
 
             # Compute Loss
-            lambdas = [2, 1, 1]
-            total_loss = self.compute_total_loss(predictions, targets_batch, inputs_batch, lambdas)
+            if self.Field == 'B':
+                total_loss = self.compute_total_loss(predictions, targets_batch, inputs_batch, lambdas, L1=L1)
+                total_loss += self.compute_div_loss(internal_batch) + self.compute_curl_loss(internal_batch)
+            elif self.Field.lower() == 'phi':
+                total_loss = 0
+                mse_loss = lambdas[0]*self.compute_mse_loss(predictions, targets_batch)
+                if L1:
+                    total_loss += self.L1_reg(lambdas[3])
+                laplacian_loss = lambdas[4]*(self.get_laplacian(inputs_batch)**2).mean()
+                laplacian_loss += lambdas[4]*(self.get_laplacian(internal_batch)**2).mean()
+
+                if i == 0:
+                    print(f'MSE Loss: {mse_loss}')
+                    print(f'Lap Loss: {laplacian_loss}')
+                
+                total_loss += mse_loss + laplacian_loss
             
             # Backwards pass and optimize
             total_loss.backward()
@@ -213,14 +306,34 @@ class MagneticFieldNN(BaseNN):
 
         validation_points_tensor = torch.tensor(validation_points, dtype=torch.float, device=self.device)
 
-        with torch.no_grad(): # Disable gradient computation
+        if self.Field == 'B':
+            with torch.no_grad(): # Disable gradient computation
+                for i in range(0, len(validation_points_tensor), batch_size):
+                    # Extract batch from validation points
+                    inputs_batch = validation_points_tensor[i:i + batch_size, :3]
+                    targets_batch = validation_points_tensor[i:i + batch_size, 3:]
+
+                    
+                    # Forward pass
+                    predictions = self.forward(inputs_batch)
+
+                    # Compute loss
+                    mse_loss = self.compute_mse_loss(predictions, targets_batch)
+
+                    # Accumulate validation loss
+                    validation_loss += mse_loss.item() * len(inputs_batch)
+                    total_points += len(inputs_batch)
+
+                    
+
+        elif self.Field == 'phi':
             for i in range(0, len(validation_points_tensor), batch_size):
                 # Extract batch from validation points
                 inputs_batch = validation_points_tensor[i:i + batch_size, :3]
                 targets_batch = validation_points_tensor[i:i + batch_size, 3:]
 
                 # Forward pass
-                predictions = self.forward(inputs_batch)
+                predictions = self.get_B_from_phi(inputs_batch)
 
                 # Compute loss
                 mse_loss = self.compute_mse_loss(predictions, targets_batch)
@@ -254,18 +367,25 @@ class MagneticFieldNN(BaseNN):
         optimizer_state_dict = torch.load(path)
         optimizer.load_state_dict(optimizer_state_dict)
 
-    def evaluate(self, inputs):
+    def evaluate(self, inputs, Field):
         # Ensure model is in evaluation mode
         self.eval()
 
         # Convert inputs to tensors
         inputs_tensor = torch.tensor(inputs, dtype=torch.float, device=self.device)
 
+        
         # Disable gradient computation for evaluation for efficiency
-        with torch.no_grad():
-            predictions = self.forward(inputs_tensor)
+        if Field == 'B':
+            with torch.no_grad():
+                predictions = self.forward(inputs_tensor)
+        elif Field.lower() == 'phi':
+            predictions = self.get_B_from_phi(inputs_tensor)
 
         # Convert back to numpy array
-        predictions_np = predictions.cpu().numpy()
+        if Field == 'B':
+            predictions_np = predictions.cpu().numpy()
+        elif Field.lower() == 'phi':
+            predictions_np = predictions.detach().cpu().numpy()
 
         return predictions_np

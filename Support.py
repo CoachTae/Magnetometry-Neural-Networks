@@ -18,12 +18,10 @@ import magfield
 
 #----------------------------NORMALIZATION--------------------------------------
 def normalize_coords(coords):
-    # coords: (N,3) torch tensor (any requires_grad)
-    sx, sy, sz = 10.0, 10.0, 300.0
-    ox, oy, oz = 0.0, 0.0, 200.0
-    # broadcast-safe, no in-place
-    return torch.stack([(coords[:,0]-ox)/sx, (coords[:,1]-oy)/sy, (coords[:,2]-oz)/sz], dim=1)
-
+    coords[:,0] = coords[:,0] / 10
+    coords[:,1] = coords[:,1] / 10
+    coords[:,2] = (coords[:,2] - 200) / 300 # Scale so that -100 -> -1 and 500 -> 1
+    return coords
 
 def scale_back_coords(coords):
     coords[:,0] = coords[:,0]*10
